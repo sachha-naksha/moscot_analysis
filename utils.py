@@ -98,6 +98,83 @@ def drivers_tf_for_subset(
 
     return drivers, drivers.head(10), drivers.tail(10).iloc[::-1]
 
+def desc_phenotype_for_subset(
+    tp0,
+    subset,
+    t_points=(3.5, 5.5),
+    data_key="sub_cell_type",
+    features="human",
+    obs_key_prefix=None,
+    normalize_push=True,
+    subset_annotation=None,   # e.g. {"sub_cell_type": ["ActB-4", "ActB-5"]}
+    qval_thresh=0.05,
+    corr_thresh=0.1,
+):
+    prefix = obs_key_prefix if obs_key_prefix is not None else f"{subset}"
+    key_added = f"{prefix}_push"
+
+    # --- Push forward ---
+    tp0.push(
+        t_points[0], t_points[1],
+        data=data_key,
+        subset=subset,
+        key_added=key_added,
+        normalize=normalize_push,
+    )
+
+    # --- Restrict to descendant (target) cells only ---
+    # Push writes values for both source and target cells;
+    # null out source so only t=5.5 descendants survive the NaN filter
+    time_col = tp0.temporal_key
+    source_mask = tp0.adata.obs[time_col] == t_points[0]
+    tp0.adata.obs.loc[source_mask, key_added] = np.nan
+
+    # --- Validate ---
+    push_sum = tp0.adata.obs[key_added].sum()
+    print(f"[push] key='{key_added}' | combined weight sum = {push_sum:.4f}")
+    if push_sum == 0:
+        raise ValueError(
+            f"All combined push weights are 0. Check that subsets {subset} exist "
+            f"at timepoints {t_points[0]} / {t_points[1]} in obs['{data_key}']."
+        )
+
+    # --- Compute feature correlation ---
+    # NaN filter keeps only target cells; annotation further subsets by cell type
+    desc_phenotype = tp0.compute_feature_correlation(
+        obs_key=key_added,
+        features=features,
+        annotation=subset_annotation, 
+    )
+
+    # --- Rename, flag, sort ---
+    desc_phenotype.columns = [c.replace(key_added, prefix) for c in desc_phenotype.columns]
+    corr_col = f"{prefix}_corr"
+    qval_col = f"{prefix}_qval"
+
+    desc_phenotype["significant"] = (
+        (desc_phenotype[qval_col] < qval_thresh) &
+        (desc_phenotype[corr_col].abs() > corr_thresh)
+    )
+    desc_phenotype = desc_phenotype.dropna(subset=[corr_col]).sort_values(corr_col, ascending=False)
+
+    n_sig = desc_phenotype["significant"].sum()
+    print(f"\n[result] {n_sig} significant drivers "
+          f"(qval<{qval_thresh}, |corr|>{corr_thresh})")
+
+    top_pos = desc_phenotype.head(10).style.set_caption(
+        f"TOP 10 CORRELATED DESCENDANT PHENOTYPE TFs  ({subset})"
+    ).background_gradient(subset=[corr_col], cmap="Reds")
+
+    top_neg = desc_phenotype.tail(10).iloc[::-1].style.set_caption(
+        f"TOP 10 ANTICORRELATED DESCENDANT PHENOTYPE TFs  ({subset})"
+    ).background_gradient(subset=[corr_col], cmap="Blues_r")
+
+    from IPython.display import display
+    display(top_pos)
+    display(top_neg)
+
+    return desc_phenotype, desc_phenotype.head(10), desc_phenotype.tail(10).iloc[::-1]
+
 def plot_drivers(
     drivers: "pd.DataFrame",
     subset: tuple,
