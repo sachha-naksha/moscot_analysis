@@ -1,1 +1,1 @@
-## Developing an OT based method to infer dirver TFs for disease/ageing progression and reversal
+## Developing an OT + SDE based flow-matching method to infer driver TFs of disease/ageing progression and reversal
